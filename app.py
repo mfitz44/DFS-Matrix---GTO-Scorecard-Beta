@@ -7,6 +7,34 @@ from dataclasses import dataclass
 
 st.set_page_config(page_title="DFS Matrix — GTO Scorecard", layout="wide")
 
+import io
+
+st.subheader("Get input templates")
+
+# Header-only template
+header_cols = ["Player","PlayerID","Salary","Event","Slate","FieldSize","Timestamp",
+               "Vegas_WinProb","Vegas_Top20Prob","Vegas_LineMove","Handle_SharpRatio",
+               "Social_Sentiment","Social_Volume","Social_RecencyScore",
+               "Tout_ProjPts","Tout_Heat","Tout_ProjOwn",
+               "SG_Long","SG_Recent","Course_Fit","Volatility_Index","CompField_Adjust",
+               "Value_PPD_Baseline","Salary_Tier",
+               "Hist_Own_TierAvg","Hist_Event_Result","Hist_CutRate"]
+
+tmpl = io.StringIO()
+tmpl.write(",".join(header_cols) + "\n")
+st.download_button("Download input header CSV", tmpl.getvalue(),
+                   file_name="gto_scorecard_input_template.csv", mime="text/csv")
+
+# 3-row sample
+sample_csv = """Player,PlayerID,Salary,Event,Slate,FieldSize,Timestamp,Vegas_WinProb,Vegas_Top20Prob,Vegas_LineMove,Handle_SharpRatio,Social_Sentiment,Social_Volume,Social_RecencyScore,Tout_ProjPts,Tout_Heat,Tout_ProjOwn,SG_Long,SG_Recent,Course_Fit,Volatility_Index,CompField_Adjust,Value_PPD_Baseline,Salary_Tier,Hist_Own_TierAvg,Hist_Event_Result,Hist_CutRate
+Scottie Scheffler,1001,12000,TOUR Championship 2025,DK Classic,30,2025-08-19T12:00:00Z,0.22,0.85,0.004,1.30,0.30,380,0.85,95.0,0.80,0.28,1.35,0.90,0.45,0.80,0.20,8.0,Stud,0.26,0.65,1.00
+Rory McIlroy,1002,11500,TOUR Championship 2025,DK Classic,30,2025-08-19T12:00:00Z,0.20,0.82,0.003,1.18,0.25,310,0.80,93.0,0.72,0.24,1.10,0.88,0.35,0.78,0.12,7.6,Stud,0.22,0.58,0.98
+Wyndham Clark,1003,9300,TOUR Championship 2025,DK Classic,30,2025-08-19T12:00:00Z,0.08,0.58,0.002,1.05,0.10,140,0.70,82.0,0.35,0.10,0.35,0.55,-0.05,0.92,-0.10,7.2,Upper,0.12,0.35,0.94
+"""
+st.download_button("Download sample input CSV", sample_csv,
+                   file_name="gto_scorecard_input_sample.csv", mime="text/csv")
+
+
 # ---------------- Config ----------------
 @dataclass
 class Weights:
@@ -245,3 +273,4 @@ else:
     except Exception as e:
         st.error(f"Processing error: {e}")
         st.stop()
+
