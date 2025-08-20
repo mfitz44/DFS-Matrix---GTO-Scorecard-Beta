@@ -60,7 +60,7 @@ def build_scorecard(dk, dg, rg):
     sal   = _safe_minmax(-merged["Salary"])  # lower salary = better
     psi   = _safe_minmax(merged["RG_proj_own"])
 
-    # Weighted RealScore (your latest weights)
+    # Weighted RealScore
     merged["RealScore"] = (
         0.30*win +
         0.20*top20 +
@@ -75,10 +75,10 @@ def build_scorecard(dk, dg, rg):
     edge_pos = (merged["RealScore"] - merged["RealScore"].min()) + 1e-6
     merged["GTO_%"] = edge_pos / edge_pos.sum() * 600.0
 
-    # Projected Ownership (RG proj_own → sum = 100%)
+    # Projected Ownership (RG proj_own → sum = 600%)
     if "RG_proj_own" in merged and not merged["RG_proj_own"].isna().all():
         po_raw = merged["RG_proj_own"].clip(lower=0.0)
-        merged["PO_%"] = po_raw / po_raw.sum() * 100.0
+        merged["PO_%"] = po_raw / po_raw.sum() * 600.0
     else:
         merged["PO_%"] = np.nan
 
@@ -107,7 +107,7 @@ if dk_file and dg_file and rg_file:
 
     st.success("Scorecard built successfully!")
     st.write(f"**Total GTO_% = {scorecard['GTO_%'].sum():.2f} (should be 600)**")
-    st.write(f"**Total PO_% = {scorecard['PO_%'].sum():.2f} (should be 100)**")
+    st.write(f"**Total PO_% = {scorecard['PO_%'].sum():.2f} (should be 600)**")
 
     st.dataframe(scorecard[[
         "Player","Salary",
