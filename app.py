@@ -113,7 +113,7 @@ def load_rg_proj(file):
 
 def load_dg_course_fit_vertical(file):
     # Parse single-column vertical export with labels baseline/ch_adj/cf_adj and numeric lines
-    df = pd.read_excel(file, sheet_name=0, header=None)
+   df = pd.read_excel(file, sheet_name=0, header=None, engine="openpyxl")
     s = df.iloc[:,0].astype(str)
 
     rows, current_player, record = [], None, {}
@@ -149,7 +149,7 @@ def load_dg_course_fit_vertical(file):
 
 def load_dg_sg_history_vertical(file):
     # Parse 1-col vertical SG history into simple aggregates (SG_Long/SG_Recent)
-    df = pd.read_excel(file, sheet_name=0, header=None)
+    df = pd.read_excel(file, sheet_name=0, header=None, engine="openpyxl")
     s = df.iloc[:,0].astype(str)
 
     rows, current_player, record = [], None, {}
@@ -442,6 +442,7 @@ if run_etl:
 
 else:
     st.info("Upload your files on the left, then click **Run ETL & Build Scorecard** to generate PO%, GTO%, and projections.")
+
 
 
 
