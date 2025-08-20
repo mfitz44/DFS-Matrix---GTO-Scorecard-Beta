@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="DFS Matrix — Simplified GTO Scorecard", layout="wide")
+st.set_page_config(page_title="DFS Matrix — Scalar Resonance GTO", layout="wide")
 
 # ========== Helpers ==========
 def normalize_name(s: str) -> str:
@@ -47,48 +47,61 @@ def load_rg_proj(file):
     keep = ["Player","RG_fpts","RG_ceil","RG_floor","RG_proj_own","RG_salary"]
     return rg[keep]
 
-# ========== Scorecard Logic ==========
-def build_scorecard(dk, dg, rg):
+# ========== Scalar Resonance GTO Process ==========
+def build_scorecard(dk, dg, rg, lambda_psi=0.3):
     merged = dk.merge(dg, on="Player", how="left").merge(rg, on="Player", how="left")
 
-    # Normalize inputs
+    # --- Normalize bubbles ---
     win   = _safe_minmax(merged["win"])
     top20 = _safe_minmax(merged["top_20"])
     fpts  = _safe_minmax(merged["RG_fpts"])
     ceil  = _safe_minmax(merged["RG_ceil"])
     floor = _safe_minmax(merged["RG_floor"])
-    sal   = _safe_minmax(-merged["Salary"])  # lower salary = better
     psi   = _safe_minmax(merged["RG_proj_own"])
 
-    # Weighted RealScore
-    merged["RealScore"] = (
-        0.30*win +
-        0.20*top20 +
-        0.15*fpts +
-        0.10*ceil +
-        0.05*floor +
-        0.10*sal +
-        0.10*psi
-    )
+    # Salary bubbles
+    eff   = _safe_minmax(merged["RG_fpts"] / merged["Salary"])
+    merged["Tier"] = pd.qcut(merged["Salary"], 4, labels=["Value","Mid","Upper","Stud"])
+    tier_map = {"Stud":0.8,"Upper":0.7,"Mid":0.6,"Value":0.5}
+    tier  = merged["Tier"].map(tier_map)
 
-    # GTO Ownership (sum = 600%)
-    edge_pos = (merged["RealScore"] - merged["RealScore"].min()) + 1e-6
-    merged["GTO_%"] = edge_pos / edge_pos.sum() * 600.0
+    # --- Dynamic weighting (variance-driven) ---
+    bubbles = {
+        "Win": win, "Top20": top20, "Fpts": fpts,
+        "Ceil": ceil, "Floor": floor, "Eff": eff, "Tier": tier
+    }
+    variances = {k: v.var() for k,v in bubbles.items()}
+    total_var = sum(variances.values()) or 1
+    weights = {k: variances[k]/total_var for k in variances}
 
-    # Projected Ownership (RG proj_own → sum = 600%)
+    # --- RealScore (variance-weighted sum) ---
+    real = sum(bubbles[k] * weights[k] for k in bubbles)
+
+    # --- PSI as coherence amplifier ---
+    real = real * (1 + lambda_psi * psi)
+
+    merged["RealScore"] = real
+
+    # --- Salary-weighted GTO normalization ---
+    q = (real / merged["Salary"]).clip(lower=1e-6)
+    gto = q / q.sum() * 600
+    merged["GTO_%"] = gto
+
+    # --- Projected Ownership scaled to 600 ---
     if "RG_proj_own" in merged and not merged["RG_proj_own"].isna().all():
         po_raw = merged["RG_proj_own"].clip(lower=0.0)
         merged["PO_%"] = po_raw / po_raw.sum() * 600.0
     else:
         merged["PO_%"] = np.nan
 
-    # Leverage (GTO – PO)
+    # --- Leverage as gradient driver ---
     merged["Leverage_%"] = merged["GTO_%"] - merged["PO_%"]
+    merged["Adj_GTO_%"] = (0.7*merged["GTO_%"] + 0.3*(merged["GTO_%"] + merged["Leverage_%"]))
 
     return merged
 
 # ========== Streamlit UI ==========
-st.title("DFS Matrix — Simplified GTO Scorecard")
+st.title("DFS Matrix — Scalar Resonance GTO Scorecard")
 
 c1, c2, c3 = st.columns(3)
 with c1:
@@ -108,21 +121,25 @@ if dk_file and dg_file and rg_file:
     st.success("Scorecard built successfully!")
     st.write(f"**Total GTO_% = {scorecard['GTO_%'].sum():.2f} (should be 600)**")
     st.write(f"**Total PO_% = {scorecard['PO_%'].sum():.2f} (should be 600)**")
+    st.write(f"**Total Adj_GTO_% = {scorecard['Adj_GTO_%'].sum():.2f} (≈ 600)**")
 
     st.dataframe(scorecard[[
-        "Player","Salary",
+        "Player","Salary","PlayerID",
         "RG_fpts","RG_ceil","RG_floor","RG_proj_own",
         "win","top_5","top_10","top_20",
-        "RealScore","PO_%","GTO_%","Leverage_%"
+        "RealScore","PO_%","GTO_%","Leverage_%","Adj_GTO_%"
     ]], use_container_width=True)
 
     out = io.StringIO()
     scorecard.to_csv(out, index=False)
-    st.download_button("Download GTO Scorecard CSV", out.getvalue(),
+    st.download_button("📥 Download GTO Scorecard CSV", out.getvalue(),
                        file_name="gto_scorecard.csv", mime="text/csv")
 
 else:
     st.info("Upload all three files to generate the GTO Scorecard.")
+
+    st.info("Upload all three files to generate the GTO Scorecard.")
+
 
 
 
