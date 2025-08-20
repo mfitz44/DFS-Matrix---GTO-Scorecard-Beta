@@ -1,144 +1,109 @@
-import io, re, unicodedata
-import numpy as np
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import numpy as np
 
-st.set_page_config(page_title="DFS Matrix — Scalar Resonance GTO", layout="wide")
+st.set_page_config(page_title="DFS Matrix — GTO Scorecard (Resonant)", layout="wide")
 
-# ========== Helpers ==========
-def normalize_name(s: str) -> str:
-    if pd.isna(s): return ""
-    s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode()
-    s = s.strip()
-    if "," in s:  # flip "Last, First" → "First Last"
-        last, first = [t.strip() for t in s.split(",", 1)]
-        s = f"{first} {last}"
-    s = re.sub(r"\s+", " ", s)
-    return s
-
-def _safe_minmax(x: pd.Series) -> pd.Series:
-    if x.isnull().all():
-        return pd.Series(0.5, index=x.index)
-    lo, hi = x.min(skipna=True), x.max(skipna=True)
-    if np.isclose(lo, hi):
-        return pd.Series(0.5, index=x.index)
-    return (x - lo) / (hi - lo)
-
-# ========== Loaders ==========
+# ------------------------
+# Loaders
+# ------------------------
 def load_dk_pool(file):
-    dk = pd.read_csv(file)
-    dk = dk.rename(columns={"Name":"Player","ID":"PlayerID","Salary":"Salary"})
-    dk["Player"] = dk["Player"].map(normalize_name)
-    dk["Salary"] = dk["Salary"].astype(int)
-    return dk[["Player","PlayerID","Salary"]]
+    return pd.read_csv(file)
 
 def load_dg_odds(file):
-    dg = pd.read_csv(file)
-    dg["Player"] = dg["player_name"].map(normalize_name)
-    keep = ["Player","win","top_5","top_10","top_20"]
-    return dg[keep]
+    return pd.read_csv(file)
 
-def load_rg_proj(file):
-    rg = pd.read_csv(file)
-    rg["Player"] = rg["name"].map(normalize_name)
-    rg = rg.rename(columns={
-        "fpts":"RG_fpts","proj_own":"RG_proj_own","ceil":"RG_ceil","floor":"RG_floor","salary":"RG_salary"
-    })
-    keep = ["Player","RG_fpts","RG_ceil","RG_floor","RG_proj_own","RG_salary"]
-    return rg[keep]
+def load_rg_projections(file):
+    return pd.read_csv(file)
 
-# ========== Scalar Resonance GTO Process ==========
-def build_scorecard(dk, dg, rg, lambda_psi=0.3):
-    merged = dk.merge(dg, on="Player", how="left").merge(rg, on="Player", how="left")
+# ------------------------
+# Build Scorecard
+# ------------------------
+def build_scorecard(dk, dg, rg):
+    # Merge data
+    merged = dk.merge(dg, on="Player", how="left")
+    merged = merged.merge(rg, on="Player", how="left")
 
-    # --- Normalize bubbles ---
-    win   = _safe_minmax(merged["win"])
-    top20 = _safe_minmax(merged["top_20"])
-    fpts  = _safe_minmax(merged["RG_fpts"])
-    ceil  = _safe_minmax(merged["RG_ceil"])
-    floor = _safe_minmax(merged["RG_floor"])
-    psi   = _safe_minmax(merged["RG_proj_own"])
-
-    # Salary bubbles
-    eff   = _safe_minmax(merged["RG_fpts"] / merged["Salary"])
-    merged["Tier"] = pd.qcut(merged["Salary"], 4, labels=["Value","Mid","Upper","Stud"])
-    tier_map = {"Stud":0.8,"Upper":0.7,"Mid":0.6,"Value":0.5}
-    tier  = merged["Tier"].map(tier_map)
-
-    # --- Dynamic weighting (variance-driven) ---
+    # Define bubbles (raw inputs)
     bubbles = {
-        "Win": win, "Top20": top20, "Fpts": fpts,
-        "Ceil": ceil, "Floor": floor, "Eff": eff, "Tier": tier
+        "Salary": merged["Salary"],
+        "WinOdds": merged["Win%"],
+        "Top20Odds": merged["Top20%"],
+        "Proj": merged["Projection"],
+        "Ceil": merged["Ceiling"],
+        "Floor": merged["Floor"],
+        "PSI": merged["ProjOwn"]  # public sentiment
     }
-    variances = {k: v.var() for k,v in bubbles.items()}
-    total_var = sum(variances.values()) or 1
-    weights = {k: variances[k]/total_var for k in variances}
 
-    # --- RealScore (variance-weighted sum) ---
-    real = sum(bubbles[k] * weights[k] for k in bubbles)
+    # Variances only for numeric bubbles
+    variances = {
+        k: v.var()
+        for k, v in bubbles.items()
+        if pd.api.types.is_numeric_dtype(v)
+    }
 
-    # --- PSI as coherence amplifier ---
-    real = real * (1 + lambda_psi * psi)
+    # Normalize each bubble
+    normed = {}
+    for k, v in bubbles.items():
+        if pd.api.types.is_numeric_dtype(v):
+            var = variances.get(k, 1)
+            normed[k] = (v - v.mean()) / np.sqrt(var) if var > 0 else v - v.mean()
+        else:
+            normed[k] = v
 
-    merged["RealScore"] = real
+    # Weights (scalar resonance distribution)
+    weights = {
+        "Salary": 0.30,
+        "WinOdds": 0.25,
+        "Top20Odds": 0.15,
+        "Proj": 0.15,
+        "Ceil": 0.05,
+        "Floor": 0.05,
+        "PSI": 0.05
+    }
 
-    # --- Salary-weighted GTO normalization ---
-    q = (real / merged["Salary"]).clip(lower=1e-6)
-    gto = q / q.sum() * 600
-    merged["GTO_%"] = gto
+    # Score
+    merged["GTO_Score"] = sum(
+        weights.get(k, 0) * normed[k] for k in normed if k in weights
+    )
 
-    # --- Projected Ownership scaled to 600 ---
-    if "RG_proj_own" in merged and not merged["RG_proj_own"].isna().all():
-        po_raw = merged["RG_proj_own"].clip(lower=0.0)
-        merged["PO_%"] = po_raw / po_raw.sum() * 600.0
-    else:
-        merged["PO_%"] = np.nan
+    # Convert to %
+    exp_scores = np.exp(merged["GTO_Score"] - merged["GTO_Score"].max())
+    merged["GTO%"] = 600 * exp_scores / exp_scores.sum()
 
-    # --- Leverage as gradient driver ---
-    merged["Leverage_%"] = merged["GTO_%"] - merged["PO_%"]
-    merged["Adj_GTO_%"] = (0.7*merged["GTO_%"] + 0.3*(merged["GTO_%"] + merged["Leverage_%"]))
+    return merged[[
+        "Player", "Salary", "Win%", "Top20%", "Projection", "Ceiling", "Floor",
+        "ProjOwn", "GTO_Score", "GTO%"
+    ]]
 
-    return merged
+# ------------------------
+# Streamlit UI
+# ------------------------
+st.title("DFS Matrix — GTO Scorecard (Resonant Beta)")
 
-# ========== Streamlit UI ==========
-st.title("DFS Matrix — Scalar Resonance GTO Scorecard")
-
-c1, c2, c3 = st.columns(3)
-with c1:
-    dk_file = st.file_uploader("DK Player Pool CSV", type=["csv"])
-with c2:
-    dg_file = st.file_uploader("DataGolf Odds CSV", type=["csv"])
-with c3:
-    rg_file = st.file_uploader("Rotogrinders Projections CSV", type=["csv"])
+st.sidebar.header("Upload Data Files")
+dk_file = st.sidebar.file_uploader("DraftKings Player Pool (CSV)", type=["csv"])
+dg_file = st.sidebar.file_uploader("DataGolf Odds (CSV)", type=["csv"])
+rg_file = st.sidebar.file_uploader("RotoGrinders Projections (CSV)", type=["csv"])
 
 if dk_file and dg_file and rg_file:
     dk = load_dk_pool(dk_file)
     dg = load_dg_odds(dg_file)
-    rg = load_rg_proj(rg_file)
+    rg = load_rg_projections(rg_file)
 
     scorecard = build_scorecard(dk, dg, rg)
+    st.success("✅ GTO Scorecard built successfully!")
 
-    st.success("Scorecard built successfully!")
-    st.write(f"**Total GTO_% = {scorecard['GTO_%'].sum():.2f} (should be 600)**")
-    st.write(f"**Total PO_% = {scorecard['PO_%'].sum():.2f} (should be 600)**")
-    st.write(f"**Total Adj_GTO_% = {scorecard['Adj_GTO_%'].sum():.2f} (≈ 600)**")
+    st.dataframe(scorecard, use_container_width=True)
 
-    st.dataframe(scorecard[[
-        "Player","Salary","PlayerID",
-        "RG_fpts","RG_ceil","RG_floor","RG_proj_own",
-        "win","top_5","top_10","top_20",
-        "RealScore","PO_%","GTO_%","Leverage_%","Adj_GTO_%"
-    ]], use_container_width=True)
-
-    out = io.StringIO()
-    scorecard.to_csv(out, index=False)
-    st.download_button("📥 Download GTO Scorecard CSV", out.getvalue(),
-                       file_name="gto_scorecard.csv", mime="text/csv")
+    # Download
+    csv = scorecard.to_csv(index=False).encode("utf-8")
+    st.download_button("Download GTO Scorecard", csv, "gto_scorecard.csv", "text/csv")
 
 else:
-    st.info("Upload all three files to generate the GTO Scorecard.")
+    st.info("Please upload all three files: DK pool, DG odds, RG projections.")
 
-    st.info("Upload all three files to generate the GTO Scorecard.")
+
 
 
 
